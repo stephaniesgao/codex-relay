@@ -34,3 +34,20 @@ Desktop model, effort, collaboration settings, sandbox, approval routing, plugin
 Automated tests cover core reset/restart safety, existing-task enrollment, refusal of terminal tasks and pending input, framed socket transport, owner-directed delivery, unknown protocols, permissions, duplicates, cancellation, backoff, uncertain submissions and a real CLI/daemon with synthetic Codex and desktop endpoints. The synthetic adoption test exercises the entire daemon path without contacting a model.
 
 Actual exhausted-account recovery, real model continuation through either external adapter, shared CLI adoption, and launchd login/reboot behavior remain untested end to end. Preflight checks and start requests are not upstream atomic compare-and-swap operations; avoid simultaneous manual sends/settings edits at the reset boundary. Loss of live owner, uncertain delivery or incompatible state stops automation.
+
+
+## Additional verification — 2026-11-23
+
+Cloned the public GitHub repository into a clean directory. `npm ci`, TypeScript
+compilation, the generated package install, and `relay doctor` succeeded. All 39
+standard tests passed against the public runtime. Real account/allowance metadata
+reads and desktop ownership inspection succeeded; repeated live snapshots retained
+the same session/turn identity and settings during normal progress.
+
+Added an opt-in `npm run test:launchd` test. It passed using an actual macOS user
+LaunchAgent and simulated Codex/desktop endpoints. launchd started the daemon, the
+monitor sent exactly one continuation to the fake original owner, and its durable
+state recorded the acknowledged new turn in the same synthetic session. The
+service, plist, and test state were removed afterward. No real model prompt or
+permission decision was sent. Physical login/reboot recovery, real shared CLI
+adoption, and a natural exhausted-account reset remain outside this validation.

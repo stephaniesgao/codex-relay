@@ -309,3 +309,26 @@ npm pack
 ```
 
 Source lives in `src/`; `cli.ts` is the command entry point; `test/` contains synthetic state-machine, subprocess, socket, and daemon adoption tests. `dist/`, `node_modules/`, credentials, session history, and runtime logs do not belong in Git. The GitHub Actions workflow runs the suite on macOS and Linux using Node.js 22. See [CAPABILITIES.md](./CAPABILITIES.md) for the verified protocol and end-to-end testing limits.
+
+
+### Optional real launchd smoke test (macOS)
+
+When logged in to a macOS GUI session, run:
+
+```sh
+npm run test:launchd
+```
+
+This opt-in test installs a temporary user LaunchAgent with a random task UUID,
+starts the actual Relay daemon through launchd, and verifies one continuation
+through a simulated desktop owner after a simulated quota failure. All Codex and
+allowance endpoints are fake: no model request, login change, or real task enrollment
+occurs. Cleanup unloads the temporary service, removes its plist, and deletes its
+test state. Do not run it with sudo. The normal `npm test` suite uses the foreground
+daemon and does not install a LaunchAgent.
+
+On 2026-11-23, the fresh public clone passed all 39 default tests and this real
+launchd smoke test on macOS. Source installation, packaged installation, official
+account/allowance reads, and read-only live desktop inspection also passed. This
+validates launchd startup with simulated endpoints, not physical logout/reboot
+recovery or a real exhausted-account reset.
