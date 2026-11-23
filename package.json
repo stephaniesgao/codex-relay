@@ -1,0 +1,35 @@
+{
+  "name": "codex-relay",
+  "version": "0.2.0",
+  "description": "Conservative local Codex usage-reset supervisor",
+  "type": "module",
+  "bin": {
+    "relay": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "PROMPTS.md",
+    "CAPABILITIES.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stephaniesgao/codex-relay.git"
+  },
+  "homepage": "https://github.com/stephaniesgao/codex-relay#readme",
+  "bugs": {
+    "url": "https://github.com/stephaniesgao/codex-relay/issues"
+  }
+}

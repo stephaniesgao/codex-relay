@@ -1,0 +1,41 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Engine, type State } from '../src/engine.js';
+import { Store } from '../src/store.js';
+import { allowance } from '../src/policy.js';
+const now=1800000000000;
+const failed={id:'turn-1',status:'failed',error:{codexErrorInfo:'usageLimitExceeded'}};
+const settings={cwd:'/tmp/project',model:'test-model',modelProvider:'openai',serviceTier:null,approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:{type:'workspaceWrite'},reasoningEffort:'high'};
+function usage(used=0,reset=now+600000,allowed=used<100):any{return {accountId:'account-1',ordinaryUsageAllowed:allowed,rateLimits:{limitId:'codex',primary:{usedPercent:used,resetsAt:reset/1000},secondary:null,spendControlReached:false}};}
+function setup(t:any) {
+ const dir=mkdtempSync(join(tmpdir(),'relay-test-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const store=new Store(dir);const state:State={version:1,threadId:'thread-1',sessionId:'session-1',settings,accountId:'account-1',limitId:'codex',phase:'running',turnId:'turn-1',checks:0,capabilities:{}};store.save(state);
+ const calls:string[]=[];let turn:any={...failed},u=usage();let active=false;let startHook:(()=>void)|undefined;
+ const thread=()=>({id:'thread-1',sessionId:'session-1',cwd:settings.cwd,ephemeral:false,status:{type:active?'active':'idle'}});
+ const api={async call(method:string,params?:any):Promise<any>{calls.push(method);if(method==='account/rateLimits/read')return u;if(method==='thread/read')return {thread:thread()};if(method==='thread/turns/list')return {data:[turn]};if(method==='thread/resume')return {...settings,thread:thread()};if(method==='turn/start'){startHook?.();return {turn:{id:'turn-2'}};}if(method==='turn/interrupt')return {};throw Error(method);}};
+ const e=new Engine(api,store,()=>now);
+ return {e,store,api,calls,fail:()=>e.event({method:'turn/completed',params:{threadId:'thread-1',turn:failed}}),setUsage:(v:any)=>u=v,setTurn:(v:any)=>turn=v,setActive:()=>active=true,hook:(v:()=>void)=>startHook=v};
+}
+test('structured usage failure persists and successful reset resumes same session once',async t=>{const x=setup(t);x.fail();assert.equal(x.store.load().phase,'waiting');await x.e.tick();assert.equal(x.e.state!.phase,'running');assert.equal(x.calls.filter(c=>c==='turn/start').length,1);assert.equal(x.e.state!.threadId,'thread-1');assert.ok(readFileSync(join(x.store.dir,'relay.jsonl'),'utf8').includes('reset_check'));});
+test('premature retries wait until reset, no model requests',async t=>{const x=setup(t);x.setUsage(usage(100));x.fail();await x.e.tick();assert.equal(x.e.state!.nextCheck,now+615000);await x.e.tick();assert.equal(x.calls.length,1);});
+test('duplicate events and concurrent ticks do not duplicate continuations',async t=>{const x=setup(t);x.fail();x.fail();await Promise.all([x.e.tick(),x.e.tick()]);assert.equal(x.calls.filter(c=>c==='turn/start').length,1);});
+test('terminal text and generic rate limits never trigger resumption',async t=>{const x=setup(t);x.e.event({method:'item/agentMessage/delta',params:{threadId:'thread-1',delta:'usage limit exceeded'}});assert.equal(x.e.state!.phase,'running');x.e.event({method:'turn/completed',params:{threadId:'thread-1',turn:{id:'turn-1',status:'failed',error:{codexErrorInfo:'rateLimitExceeded'}}}});await x.e.tick();assert.equal(x.e.state!.phase,'blocked');assert.equal(x.calls.length,0);});
+test('manual cancellation and normal completion never resume',async t=>{for(const status of ['interrupted','completed']){const x=setup(t);x.e.event({method:'turn/completed',params:{threadId:'thread-1',turn:{id:'turn-1',status}}});await x.e.tick();assert.equal(x.calls.length,0);}});
+test('manual cancellation while waiting invalidates continuation',async t=>{const x=setup(t);x.fail();x.setTurn({id:'turn-1',status:'interrupted'});await x.e.tick();assert.equal(x.e.state!.phase,'blocked');assert.ok(!x.calls.includes('turn/start'));});
+test('daemon restart recovers verified interruption and reset schedule',async t=>{const x=setup(t);x.fail();x.setUsage(usage(100));await x.e.tick();const e=new Engine(x.api,x.store,()=>now);await e.recover();await e.tick();assert.equal(e.state!.phase,'waiting');assert.ok(!x.calls.includes('turn/start'));});
+test('restart after uncertain submission fails closed',async t=>{const x=setup(t);x.e.state!.phase='submitting';x.e.persist('simulate_crash');const e=new Engine(x.api,x.store,()=>now);await e.recover();assert.equal(e.state!.phase,'blocked');assert.equal(x.calls.length,0);});
+test('pause and stop suppress retries',async t=>{const x=setup(t);x.fail();await x.e.control('pause');await x.e.tick();assert.equal(x.calls.length,0);await x.e.control('stop');await x.e.tick();assert.equal(x.e.state!.phase,'stopped');});
+test('approval and input requests are never answered',async t=>{const x=setup(t);x.fail();x.e.event({serverRequest:true,method:'item/tool/requestUserInput',id:5,params:{threadId:'thread-1'}});await x.e.tick();assert.equal(x.calls.length,0);assert.equal(x.e.state!.phase,'blocked');});
+test('changed account, session, active owner, or settings stops',async t=>{for(const mode of ['account','turn','active','settings']){const x=setup(t);x.fail();if(mode==='account')x.setUsage({...usage(),accountId:'other'});if(mode==='turn')x.setTurn({...failed,id:'other'});if(mode==='active')x.setActive();if(mode==='settings')x.e.state!.settings.model='changed';await x.e.tick();assert.equal(x.e.state!.phase,'blocked');assert.ok(!x.calls.includes('turn/start'));}});
+test('unknown resets use bounded exponential backoff',async t=>{const x=setup(t);x.fail();x.setUsage(usage(100,NaN));for(let i=0;i<13;i++){x.e.state!.nextCheck=now;await x.e.tick();}assert.equal(x.e.state!.phase,'blocked');assert.ok(!x.calls.includes('turn/start'));});
+test('backend permission required even when percentages are available',()=>{assert.equal(allowance({...usage(),ordinaryUsageAllowed:null},'codex',now).ready,false);assert.equal(allowance(usage(0,now-1000),'codex',now).ready,false);});
+test('all exhausted windows use latest reset, not earliest',()=>{const u=usage(100);u.rateLimits.secondary={usedPercent:100,resetsAt:(now+900000)/1000};assert.equal(allowance(u,'codex',now).next,now+915000);});
+test('sparse update cannot authorize early continuation',async t=>{const x=setup(t);x.fail();x.e.state!.nextCheck=now+10000;x.e.event({method:'account/rateLimits/updated',params:{rateLimits:usage().rateLimits}});await x.e.tick();assert.equal(x.calls.length,0);});
+test('per-session locks exclude concurrent owners and recover dead owners',t=>{const x=setup(t);const release=x.store.lock('session-thread-1');assert.throws(()=>x.store.lock('session-thread-1'),/locked/);release();x.store.lock('session-thread-1')();});
+test('approval received during submission remains blocked after acknowledgement',async t=>{const x=setup(t);x.fail();x.hook(()=>x.e.event({serverRequest:true,method:'item/commandExecution/requestApproval'}));await x.e.tick();assert.equal(x.e.state!.phase,'blocked');});
+test('paused monitoring still records completion and never reopens completed task',async t=>{const x=setup(t);await x.e.control('pause');x.e.event({method:'turn/completed',params:{threadId:'thread-1',turn:{id:'turn-1',status:'completed'}}});assert.equal(x.e.state!.phase,'completed');await assert.rejects(x.e.control('resume'));});
+test('subsequent usage interruption can resume again in the same thread',async t=>{const x=setup(t);x.fail();await x.e.tick();const second={...failed,id:'turn-2'};x.setTurn(second);x.e.event({method:'turn/completed',params:{threadId:'thread-1',turn:second}});await x.e.tick();assert.equal(x.calls.filter(c=>c==='turn/start').length,2);assert.equal(x.e.state!.threadId,'thread-1');});
+test('stop during an in-flight submission interrupts the acknowledged new turn',async t=>{const x=setup(t);x.fail();x.hook(()=>{x.e.state!.phase='stopped';x.e.persist('simulate_stop');});await x.e.tick();assert.equal(x.e.state!.phase,'stopped');assert.ok(x.calls.includes('turn/interrupt'));});
