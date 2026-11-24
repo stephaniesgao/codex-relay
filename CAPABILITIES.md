@@ -51,3 +51,25 @@ state recorded the acknowledged new turn in the same synthetic session. The
 service, plist, and test state were removed afterward. No real model prompt or
 permission decision was sent. Physical login/reboot recovery, real shared CLI
 adoption, and a natural exhausted-account reset remain outside this validation.
+
+
+## 0.2.1 connection and enrollment recovery — 2026-11-24
+
+A real desktop enrollment failed on a snapshot timeout, leaving `state.json: null`
+after its bootstrap target was consumed. Another monitor treated a transient read
+timeout as permanent. The new implementation persists the exact enrollment target
+before probing or connecting; live read outages have a bounded, persisted reconnect
+budget. A complete fresh read is required before any continuation. Failed writes
+remain uncertain and cannot enter this retry path.
+
+The reader now decodes large framed snapshots in linear time. The account-update
+notification schema contains auth mode and plan, not an account ID; ordinary startup
+metadata now causes an explicit ID verification instead of a false switch warning.
+Changed account IDs, sign-outs and unsupported auth modes still block continuation.
+
+54 regression tests pass, including startup outages, restart during enrollment,
+retained quota deadlines, actual framed-socket reconnection, large snapshots,
+startup account notifications, changed accounts and ambiguous continuation delivery.
+The repaired live portfolio monitor successfully enrolled in `running` phase with
+no enrollment pending and no automatic continuation sent during diagnosis. A real
+natural exhausted-account recovery has still not been exercised end to end.

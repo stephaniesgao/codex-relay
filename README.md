@@ -10,7 +10,7 @@ A local TypeScript daemon that automatically continues Codex tasks after verifie
 - [Controls](#controls), [troubleshooting](#troubleshooting), and [updates and uninstall](#updates-and-uninstall) cover daily operation.
 - [Safety](#quota-and-crash-safety) and [validation](#validation) explain what Relay verifies and what remains untested.
 
-**Experimental:** read-only desktop inspection and 39 automated tests pass. A natural exhausted-account reset, real external model continuation, shared CLI adoption, and launchd reboot recovery have not been validated end to end. Relay stops for human attention when it cannot verify safety. It is an unofficial local tool, not an OpenAI product.
+**Experimental:** read-only desktop inspection and 54 automated tests pass. A natural exhausted-account reset, real external model continuation, shared CLI adoption, and launchd reboot recovery have not been validated end to end. Relay stops for human attention when it cannot verify safety. It is an unofficial local tool, not an OpenAI product.
 
 ## CLI setup
 
@@ -58,7 +58,7 @@ For example:
 node /absolute/path/to/codex-relay/dist/cli.js doctor
 ```
 
-An optional local tarball install can be built with `npm pack` and installed using `npm install -g ./codex-relay-0.2.0.tgz`. A tarball or npm registry release is not required for the source installation above.
+An optional local tarball install can be built with `npm pack` and installed using `npm install -g ./codex-relay-0.2.1.tgz`. A tarball or npm registry release is not required for the source installation above.
 
 ### 3. Find the UUID of an existing task
 
@@ -88,7 +88,7 @@ relay status --thread "$THREAD_ID"
 relay logs --thread "$THREAD_ID"
 ```
 
-Look for `phase: "running"` or `phase: "waiting"` in status. `running` means Relay is monitoring the existing turn. `waiting` means it recorded a structured quota interruption and is waiting/checking for allowance. `blocked` means human attention is required; inspect `reason` and the logs. `completed` and `stopped` do not automatically rearm.
+Look for `phase: "running"` or `phase: "waiting"` in status. `running` means Relay is monitoring the existing turn. `waiting` means it recorded a structured quota interruption and is waiting/checking for allowance. `connecting` means the exact target is saved but live enrollment is still pending; `reconnecting` means an established monitor is retrying read-only observations. Neither state permits a model request. `blocked` means human attention is required; inspect `reason` and the logs. `lastObservedAt` reports the latest verified live read when available. `completed` and `stopped` do not automatically rearm.
 
 launchd registration returns before initialization finishes. If status briefly says the daemon is offline, retry status after a few seconds and inspect `daemon.log` under the task's state directory if startup fails. Enrollment itself sends no continuation prompt. The Mac must be awake and the desktop app must retain a live owner for the selected task.
 
@@ -133,7 +133,7 @@ limitations when you next provide a task update. Follow the host's normal approv
 rules; this prompt does not bypass them.
 ```
 
-The agent may need normal host permission to install tools, use sockets, write its user LaunchAgent, or access a private repository. Relay does not grant those permissions. If the original task ends normally after setup, monitoring also ends normally; this tool recovers quota failures, not arbitrary pauses or every completed turn.
+The agent may need normal host permission to install tools, use sockets, write its user LaunchAgent, or access a private repository. Relay does not grant those permissions. Use a running/waiting phase or a completed enrollment (`enrollmentPending: false`) to confirm success; merely installing a LaunchAgent is not proof of enrollment. If the original task ends normally after setup, monitoring also ends normally; this tool recovers quota failures, not arbitrary pauses or every completed turn.
 
 For prompts that reuse an existing installation or monitor a different explicitly selected task, see [PROMPTS.md](./PROMPTS.md).
 
@@ -152,7 +152,7 @@ relay status --thread YOUR-THREAD-UUID
 
 `start --thread` enrolls that specific existing task. It sends no enrollment prompt, creates no conversation, and does not transfer ownership. The task must be running or have a structured quota failure. A normally completed or manually cancelled task is ineligible. With `--launchd`, enrollment initializes asynchronously; check status and logs for success. Without that flag, the daemon detaches from the terminal and prints enrollment state.
 
-The desktop integration discovers the current owner through the app's local IPC, follows its live state, verifies pending requests, queues, goal state, session identity and settings, and asks the same owner to start the continuation after allowance recovery. It uses the installed experimental owner/follower protocol; this is **not** the public CLI app-server protocol. Relay never becomes an approval handler or thread owner. Keep the app running, the exact task loaded, and the Mac awake for unattended recovery. Losing the owner or socket stops monitoring for attention; there is no unsafe disk-only fallback.
+The desktop integration discovers the current owner through the app's local IPC, follows its live state, verifies pending requests, queues, goal state, session identity and settings, and asks the same owner to start the continuation after allowance recovery. It uses the installed experimental owner/follower protocol; this is **not** the public CLI app-server protocol. Relay never becomes an approval handler or thread owner. Keep the app running, the exact task loaded, and the Mac awake for unattended recovery. Read-only owner/socket outages enter a persisted reconnect state with bounded backoff; there is no unsafe disk-only fallback. A different owner, changed identity/settings, permission request, or uncertain submission still stops monitoring for attention.
 
 Existing tasks retain their sandbox, approval routing, collaboration mode, reasoning settings, plugins and environment. Relay submits no policy overrides and makes no approval decisions. An existing automatic approval reviewer continues to be controlled by Codex's own configuration; Relay does not enable or act as that reviewer. Approval or user-input requests in live state stop Relay.
 
@@ -184,7 +184,7 @@ relay stop --thread YOUR-THREAD-UUID
 relay start --thread YOUR-THREAD-UUID  # restart persisted monitoring
 ```
 
-`pause` suspends automatic continuation without cancelling active work. `resume` only re-enables explicitly paused monitoring, after checking the actual task. It does not clear attention blocks or manually submit a continuation. For an external task, `stop` **only disables monitoring**; use Codex's own UI to cancel work. Offline `pause` and `stop` persist under the daemon lock. An offline paused monitor can be restarted with `start`, then resumed.
+`pause` suspends automatic continuation without cancelling active work. `resume` re-enables explicitly paused monitoring or a block marked as a verified read-only connection failure, after checking the actual task. It never clears uncertain delivery, cancellation, authentication, permission, or identity blocks, and does not manually submit a continuation. For an external task, `stop` **only disables monitoring**; use Codex's own UI to cancel work. Offline `pause` and `stop` persist under the daemon lock. An offline paused monitor can be restarted with `start`, then resumed.
 
 Each external UUID has its own state subdirectory and launchd label, so separate tasks can be explicitly enrolled independently. There is no blanket auto-resume of every unfinished chat. Re-running `start` does not rearm a completed, cancelled, stopped, blocked or delivery-uncertain monitor. Inspect the original session before choosing to create a new monitoring state directory.
 
@@ -268,7 +268,7 @@ Relay refuses sockets or IPC directories that are accessible to other users or h
 
 ### Monitoring is blocked or submission is uncertain
 
-Read `reason` in status, the audit log, and the original Codex task. Approvals, user input, settings changes, account changes, incompatible state and ambiguous delivery stop automation. `resume` clears only an explicit pause; it does not clear an uncertainty block. Do not delete state or create a second monitor just to force another send. Verify whether the previous continuation reached Codex before deciding how to proceed manually.
+Read `reason` in status, the audit log, and the original Codex task. Approvals, user input, settings changes, account changes, incompatible state and ambiguous delivery stop automation. `resume` handles an explicit pause or an exhausted read-only reconnection budget; it never clears an uncertainty or permission block. Do not delete state or create a second monitor just to force another send. Verify whether the previous continuation reached Codex before deciding how to proceed manually.
 
 ### launchd service is offline or fails after an update
 
@@ -332,3 +332,28 @@ launchd smoke test on macOS. Source installation, packaged installation, officia
 account/allowance reads, and read-only live desktop inspection also passed. This
 validates launchd startup with simulated endpoints, not physical logout/reboot
 recovery or a real exhausted-account reset.
+
+
+### Connection-recovery fix in 0.2.1
+
+A real enrollment failure exposed two bugs in 0.2.0: a desktop read timeout could
+permanently stop observation, and startup consumed the saved enrollment target
+before a successful snapshot. Version 0.2.1 saves the exact target before any
+probe/connection and retries explicitly read-only outages using persisted backoff
+(5 seconds initially, capped at 5 minutes, at most 12 retries). Startup exposes a
+`connecting` status instead of losing its target or implying enrollment succeeded.
+An established monitor uses `reconnecting`, preserves its quota deadline, and
+rechecks the same session, owner, settings, canonical turn and account before sending.
+
+Incoming large snapshots use a linear-time frame decoder rather than repeatedly
+copying a growing buffer. Normal startup `account/updated` metadata is verified
+against a fresh account-ID read instead of being mistaken for an account switch.
+Actual account changes and sign-outs still block. A timeout after submission intent
+is still uncertain delivery and is never retried as a read outage.
+
+If 0.2.0 left `state.json` as `null`, updating alone cannot reconstruct which task
+was selected. Use its existing per-thread LaunchAgent path or your original exact
+UUID to verify the target before restoring enrollment; preserve an audit backup
+and never overwrite a pending/uncertain submission. Do not delete state to force
+a retry. The failure diagnosed here was repaired with a verified exact target and
+no submitted continuation; the existing portfolio task was already running.

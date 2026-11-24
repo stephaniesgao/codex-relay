@@ -33,6 +33,6 @@ export class RPC implements API {
   const p=this.pending.get(m.id); if(!p)return; this.pending.delete(m.id); clearTimeout(p.timer); m.error ? p.reject(Error('RPC request failed (code '+String(m.error.code)+')')) : p.resolve(m.result);
  }
  call(method:string,params:any={}) { const id=++this.seq; return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Error('RPC timeout: '+method));},30000);this.pending.set(id,{resolve,reject,timer});this.child.stdin.write(JSON.stringify({id,method,params})+'\n');}); }
- async initialize() {await this.call('initialize',{clientInfo:{name:'codex_relay',title:'Codex Relay',version:'0.2.0'},capabilities:{experimentalApi:false}});this.child.stdin.write(JSON.stringify({method:'initialized'})+'\n');}
+ async initialize() {await this.call('initialize',{clientInfo:{name:'codex_relay',title:'Codex Relay',version:'0.2.1'},capabilities:{experimentalApi:false}});this.child.stdin.write(JSON.stringify({method:'initialized'})+'\n');}
  close() {this.child.stdin.end();this.child.kill();}
 }
